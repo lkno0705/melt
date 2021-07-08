@@ -1474,7 +1474,60 @@ def transformers_prediction():
         import traceback
         return "ERROR " + traceback.format_exc()
 
+@app.route("/sbert-prediction", methods=["GET"])
+def sbert_prediction():
+    try:
+        import csv
+        from sklearn.metrics.pairwise import cosine_similarity
+        from sentence_transformers import SentenceTransformer, util
 
+        model_name = request.headers.get("modelName")
+        prediction_file_path = request.headers.get("predictionFilePath")
+        model = SentenceTransformer(model_name)
+
+        scores = []
+
+        with open(prediction_file_path, encoding="utf-8") as csvfile:
+            readCSV = csv.reader(csvfile, delimiter=",")
+            for row in readCSV:
+                a = model.encode(row[0], convert_to_tensor=True)
+                b = model.encode(row[1], convert_to_tensor=True)
+                cosine_scores = util.pytorch_cos_sim(a, b)
+                scores.append(round(cosine_scores[0][0].item(), 4))
+
+        return jsonify(scores)
+    except Exception as e:
+        import traceback
+        return "ERROR " + traceback.format_exc()
+
+@app.route("/huggingface-prediction", methods=["GET"])
+def huggingface_prediction():
+    try:
+        import csv
+        from transformers import AutoTokenizer, AutoModelForSequenceClassification
+        import torch
+
+        model_name = request.headers.get("modelName")
+        prediction_file_path = request.headers.get("predictionFilePath")
+
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        model = AutoModelForSequenceClassification.from_pretrained(model_name)
+
+        scores = []
+
+        with open(prediction_file_path, encoding="utf-8") as csvfile:
+            readCSV = csv.reader(csvfile, delimiter=",")
+            for row in readCSV:
+                inputs_to_be_checked = tokenizer(row[0], row[1], return_tensors="pt")
+                classification_logits = model(**inputs_to_be_checked).logits
+                results = torch.softmax(classification_logits, dim=1).tolist()[0]
+
+                scores.append(round(results[1], 4))
+
+        return jsonify(scores)
+    except Exception as e:
+        import traceback
+        return "ERROR " + traceback.format_exc()
 
 @app.route("/transformers-finetuning", methods=["GET"])
 def transformers_finetuning():
