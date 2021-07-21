@@ -1,5 +1,10 @@
 package de.uni_mannheim.informatik.dws.melt.matching_ml.python;
 
+import de.uni_mannheim.informatik.dws.melt.matching_ml.python.nlptransformers.TransformersFineTuner;
+import de.uni_mannheim.informatik.dws.melt.matching_ml.python.nlptransformers.TransformersBase;
+import de.uni_mannheim.informatik.dws.melt.matching_ml.python.nlptransformers.TransformersFilter;
+import de.uni_mannheim.informatik.dws.melt.matching_ml.python.nlptransformers.TransformersFineTunerHpSearch;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -24,9 +29,11 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
+import java.util.logging.Level;
 import java.util.stream.Collectors;
 
 import org.apache.http.client.methods.HttpPost;
+import org.apache.http.client.methods.HttpUriRequest;
 import org.apache.http.entity.ContentType;
 import org.apache.http.entity.StringEntity;
 
@@ -121,117 +128,95 @@ public class PythonServer {
      * Transformer section
      ***********************************/
 
+
+    /**
+     * Run a hyperparameter fine tuning.
+     * @param hpsearch the hyper parameter search model to use
+     * @param trainingFile path to csv file with three columns (text left, text right, label 1/0).
+     * @throws PythonServerException in case something goes wrong.
+     */
+    public void transformersFineTuningHpSearch(TransformersFineTunerHpSearch hpsearch, File trainingFile) throws PythonServerException{
+        HttpGet request = new HttpGet(serverUrl + "/transformers-finetuning-hp-search");
+        transformersUpdateBaseRequest(hpsearch, request);
+        
+        request.addHeader("resultingModelLocation", getCanonicalPath(hpsearch.getResultingModelLocation()));
+        request.addHeader("trainingFile", getCanonicalPath(trainingFile));
+        request.addHeader("numberOfTrials", Integer.toString(hpsearch.getNumberOfTrials()));
+        request.addHeader("testSize", Float.toString(hpsearch.getTestSize()));
+        request.addHeader("optimizingMetric", hpsearch.getOptimizingMetric().toString());        
+        request.addHeader("hpSpace", hpsearch.getHpSpace().toJsonString());
+        request.addHeader("hpMutations", hpsearch.getHpMutations().toJsonString());
+        
+        runRequest(request);
+    }
+    
     /**
      * Finetune a transformers model with the given parameters and write this model to a given folder.
-     *
-     * @param initialModelName       the name of the pretrained model which should be finetuned.
-     * @param resultingModelLocation the directory where the resulting model should be stored.
-     * @param trainingFile           path to csv file with three columns (text left, text right, label 1/0).
-     * @param usingTF                if true, using tensorflow, if false use pytorch
-     * @param cudaVisibleDevices     the devices visible in cuda (can be null) examples are "0" to show only the first GPU or "1,2" to show only the second and thirs GPU.
-     * @param transformersCache      the directory where the transformers library stores the models.
-     * @param config                 the configuration of the transformers trainer. All parameters of the <a href="https://huggingface.co/transformers/main_classes/trainer.html#trainingarguments">huggingface training arguments</a> can be used.
-     * @throws Exception in case something goes wrong.
+     * @param fineTuner the finetuner to use
+     * @param trainingFile path to csv file with three columns (text left, text right, label 1/0).
+     * @throws PythonServerException in case something goes wrong.
      */
-    public void transformersFineTuning(String initialModelName, File resultingModelLocation, File trainingFile, boolean usingTF, String cudaVisibleDevices, File transformersCache, TransformerConfiguration config) throws Exception {
+    public void transformersFineTuning(TransformersFineTuner fineTuner, File trainingFile) throws PythonServerException{
         HttpGet request = new HttpGet(serverUrl + "/transformers-finetuning");
-        request.addHeader("initialModelName", initialModelName);
-        request.addHeader("resultingModelLocation", getCanonicalPath(resultingModelLocation));
+        transformersUpdateBaseRequest(fineTuner, request);
+        
+        request.addHeader("resultingModelLocation", getCanonicalPath(fineTuner.getResultingModelLocation()));
         request.addHeader("trainingFile", getCanonicalPath(trainingFile));
-        request.addHeader("usingTF", Boolean.toString(usingTF));
-        request.addHeader("config", config.toJsonString());
-
-        if (cudaVisibleDevices != null && cudaVisibleDevices.isEmpty() == false)
-            request.addHeader("cudaVisibleDevices", cudaVisibleDevices);
-
-        if (transformersCache != null)
-            request.addHeader("transformersCache", getCanonicalPath(transformersCache));
-
-        try (CloseableHttpResponse response = httpClient.execute(request)) {
-            HttpEntity entity = response.getEntity();
-            if (entity == null) {
-                throw new Exception("No server response.");
-            } else {
-                String resultString = EntityUtils.toString(entity);
-                if (resultString.startsWith("ERROR") || resultString.contains("500 Internal Server Error")) {
-                    throw new Exception(resultString);
-                }
-            }
-        }
+        
+        runRequest(request);
     }
 
-    /**
+/**
      * Run a transformers model on a CSV file with two columns (text left and text right) to predict if they describe the same concept.
-     *
-     * @param modelName          the name of the pretrained model which
-     *                           is downloaded or a path to a directory containing model weights
-     *                           (<a href="https://huggingface.co/transformers/main_classes/model.html#transformers.PreTrainedModel.from_pretrained">
-     *                           see first parameter pretrained_model_name_or_path of the from_pretrained
-     *                           function in huggingface library</a>).
+     * @param filter the filter
      * @param predictionFilePath path to csv file with two columns (text left and text right).
-     * @param usingTF            if true, using tensorflow, if false use pytorch
-     * @param cudaVisibleDevices the devices visible in cuda (can be null) examples are "0" to show only the first GPU or "1,2" to show only the second and thirs GPU.
-     * @param transformersCache  the directory where thre transformetrs library stores the models.
-     * @param changeClass        if false the confidences of class 1 are used, if true the confidences of class 2 are used.
-     * @param config             the configuration of the transformers trainer. All parameters of the <a href="https://huggingface.co/transformers/main_classes/trainer.html#trainingarguments">huggingface training arguments</a> can be used.
+     * @throws PythonServerException in case something goes wrong.
      * @return a list of confidences
-     * @throws Exception in case something goes wrong.
      */
-    public List<Double> transformersPrediction(String modelName, File predictionFilePath, boolean usingTF, String cudaVisibleDevices, File transformersCache, boolean changeClass, TransformerConfiguration config) throws Exception {
+    public List<Double> transformersPrediction(TransformersFilter filter, File predictionFilePath) throws PythonServerException {
         //curl http://127.0.0.1:41193/transformers-prediction
         HttpGet request = new HttpGet(serverUrl + "/transformers-prediction");
-        request.addHeader("modelName", modelName);
+        transformersUpdateBaseRequest(filter, request);
+        
         request.addHeader("predictionFilePath", getCanonicalPath(predictionFilePath));
-        request.addHeader("usingTF", Boolean.toString(usingTF));
-        request.addHeader("changeClass", Boolean.toString(changeClass));
-        request.addHeader("config", config.toJsonString());
+        request.addHeader("changeClass", Boolean.toString(filter.isChangeClass()));
 
-        if (cudaVisibleDevices != null && cudaVisibleDevices.isEmpty() == false)
-            request.addHeader("cudaVisibleDevices", cudaVisibleDevices);
+        String resultString = runRequest(request);
+        try {
+            return JSON_MAPPER.readValue(resultString, JSON_MAPPER.getTypeFactory().constructCollectionType(List.class, Double.class));
+        } catch (JsonProcessingException ex) {
+            throw new PythonServerException("Could not parse JSON", ex);
+        }
+    }
 
-        if (transformersCache != null)
+    
+
+    
+    private void transformersUpdateBaseRequest(TransformersBase base, HttpGet request){
+        request.addHeader("modelName", base.getModelName());
+        request.addHeader("usingTF", Boolean.toString(base.isUsingTensorflow()));
+        request.addHeader("trainingArguments", base.getTrainingArguments().toJsonString());
+        request.addHeader("tmpDir", getCanonicalPath(base.getTmpDir()));
+        
+        String cudaVisibleDevices = base.getCudaVisibleDevices();
+        if(cudaVisibleDevices != null){
+            cudaVisibleDevices = cudaVisibleDevices.trim();
+            if(cudaVisibleDevices.isEmpty() == false){
+                request.addHeader("cudaVisibleDevices", cudaVisibleDevices);
+            }
+        }
+        
+        File transformersCache = base.getTransformersCache();
+        if(transformersCache != null)
             request.addHeader("transformersCache", getCanonicalPath(transformersCache));
-
-        try (CloseableHttpResponse response = httpClient.execute(request)) {
-            HttpEntity entity = response.getEntity();
-            if (entity == null) {
-                throw new Exception("No server response.");
-            } else {
-                String resultString = EntityUtils.toString(entity);
-                if (resultString.startsWith("ERROR") || resultString.contains("500 Internal Server Error")) {
-                    throw new Exception(resultString);
-                } else
-                    return JSON_MAPPER.readValue(resultString, JSON_MAPPER.getTypeFactory().constructCollectionType(List.class, Double.class));
-            }
-        }
     }
-
-    public List<Double> transformerVLLMPrediction(String modelName, File predictionFilePath, boolean sbert) throws Exception {
-        HttpGet request = new HttpGet(serverUrl + "/huggingface-prediction");
-        if (sbert) {
-            request = new HttpGet(serverUrl + "/sbert-prediction");
-        }
-
-        request.addHeader("modelName", modelName);
-        request.addHeader("predictionFilePath", getCanonicalPath(predictionFilePath));
-
-        try (CloseableHttpResponse response = httpClient.execute(request)) {
-            HttpEntity entity = response.getEntity();
-            if (entity == null) {
-                throw new Exception("No server response.");
-            } else {
-                String resultString = EntityUtils.toString(entity);
-                if (resultString.startsWith("ERROR") || resultString.contains("500 Internal Server Error")) {
-                    throw new Exception(resultString);
-                } else
-                    return JSON_MAPPER.readValue(resultString, JSON_MAPPER.getTypeFactory().constructCollectionType(List.class, Double.class));
-            }
-        }
-    }
-
+    
+    
+    
     /************************************
      * OpenEA section
-     ***********************************/
+     * **********************************/
+
 
     /**
      * Run the openEA library.
@@ -258,10 +243,9 @@ public class PythonServer {
         }
     }
 
-
-    /************************************
+    /* ***********************************
      * learn ML model for Alignment
-     ***********************************/
+     * **********************************/
 
     /**
      * Learn a ML model for a given training file.
@@ -351,9 +335,9 @@ public class PythonServer {
         }
     }
 
-    /************************************
+    /* ***********************************
      * Embedding alignment
-     ***********************************/
+     * **********************************/
 
     /**
      * Align two knowledge graph embeddings
@@ -401,9 +385,9 @@ public class PythonServer {
     }
 
 
-    /************************************
+    /* ***********************************
      * Vector space model
-     ***********************************/
+     * **********************************/
 
     /**
      * Method to train a vector space model. The file for the training (i.e., csv file where first column is id and second column text) has to
@@ -423,7 +407,6 @@ public class PythonServer {
             LOGGER.error("Problem with http request.", ioe);
         }
     }
-
 
     /**
      * Method to query a vector space model (which has to be trained with trainVectorSpaceModel).
@@ -521,9 +504,9 @@ public class PythonServer {
     }
 
 
-    /************************************
+    /* ***********************************
      * doc2vec model
-     ***********************************/
+     * **********************************/
 
     /**
      * Method to train a doc2vec model. The file for the training (i.e., csv file where first column is id and second colum text) has to
@@ -591,9 +574,10 @@ public class PythonServer {
     }
 
 
-    /************************************
+
+    /* ***********************************
      * Word2vec model
-     ***********************************/
+     * **********************************/
 
     /**
      * Method to train a word2vec model. The file for the training (i.e., file with sentences, paths etc.) has to
@@ -658,7 +642,7 @@ public class PythonServer {
             Double[] v1 = getVector(concept1, modelOrVectorPath);
             Double[] v2 = getVector(concept2, modelOrVectorPath);
             if (v1 != null && v2 != null) {
-                return this.cosineSimilarity(v1, v2);
+                return cosineSimilarity(v1, v2);
             }
         } else {
             HttpGet request = new HttpGet(serverUrl + "/get-similarity");
@@ -720,7 +704,7 @@ public class PythonServer {
                         try {
                             result[i] = Double.parseDouble(tokenizedResult[i]);
                         } catch (NumberFormatException nfe) {
-                            LOGGER.error("Number format exception occured on token: " + tokenizedResult[i], nfe);
+                            LOGGER.error("Number format exception occurred on token: " + tokenizedResult[i], nfe);
                             // cannot return vector
                             if (isVectorCaching) {
                                 vectorCache.put(v1key, null);
@@ -822,9 +806,8 @@ public class PythonServer {
             LOGGER.error("Problem with http request. Returning empty set.", ioe);
         } catch (Exception e) {
             LOGGER.error("Another exception occurred.", e);
-        } finally {
-            return result;
         }
+        return result;
     }
 
     /**
@@ -940,6 +923,22 @@ public class PythonServer {
             LOGGER.error("Problem with http request.", ioe);
         }
     }
+    
+    private String runRequest(HttpUriRequest request) throws PythonServerException{
+        try (CloseableHttpResponse response = httpClient.execute(request)) {
+            HttpEntity entity = response.getEntity();
+            if (entity == null) {
+                throw new PythonServerException("No server response.");
+            } else {
+                String resultString = EntityUtils.toString(entity);
+                if (resultString.startsWith("ERROR") || resultString.contains("500 Internal Server Error")) {
+                    throw new PythonServerException(resultString);
+                } else return resultString;
+            }
+        } catch (IOException ex) {
+            throw new PythonServerException("Could not execute python server request", ex);
+        }
+    }
 
     /**
      * Instance (singleton pattern.
@@ -1040,7 +1039,7 @@ public class PythonServer {
      */
     private void exportResource(File baseDirectory, String resourceName) {
         File destination = new File(baseDirectory, resourceName);
-        if (PythonServer.overridePythonFiles == false && destination.exists())
+        if (!PythonServer.overridePythonFiles && destination.exists())
             return;
 
         // there must not be an OS-specific separator - a forward slash is strictly required here (getResourceAsStream)!
@@ -1105,7 +1104,7 @@ public class PythonServer {
         try {
             pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
             pb.redirectError(ProcessBuilder.Redirect.INHERIT);
-            this.serverProcess = pb.start();
+            serverProcess = pb.start();
             final int maxTrials = 10;
             for (int i = 0; i < maxTrials; i++) {
                 HttpGet request = new HttpGet(serverUrl + "/melt_ml.html");
@@ -1421,5 +1420,28 @@ public class PythonServer {
 
     public static String getServerUrl() {
         return serverUrl;
+    }
+    
+    public List<Double> transformerVLLMPrediction(String modelName, File predictionFilePath, boolean sbert) throws Exception {
+        HttpGet request = new HttpGet(serverUrl + "/huggingface-prediction");
+        if (sbert) {
+            request = new HttpGet(serverUrl + "/sbert-prediction");
+        }
+
+        request.addHeader("modelName", modelName);
+        request.addHeader("predictionFilePath", getCanonicalPath(predictionFilePath));
+
+        try (CloseableHttpResponse response = httpClient.execute(request)) {
+            HttpEntity entity = response.getEntity();
+            if (entity == null) {
+                throw new Exception("No server response.");
+            } else {
+                String resultString = EntityUtils.toString(entity);
+                if (resultString.startsWith("ERROR") || resultString.contains("500 Internal Server Error")) {
+                    throw new Exception(resultString);
+                } else
+                    return JSON_MAPPER.readValue(resultString, JSON_MAPPER.getTypeFactory().constructCollectionType(List.class, Double.class));
+            }
+        }
     }
 }
