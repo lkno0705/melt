@@ -64,7 +64,6 @@ def check_requirements() -> str:
                 pkg_resources.require(requirement)
                 ok_requirements.append(requirement)
             except Exception as error:
-                missing = str(error)
                 missing_requirements.append(requirement)
         message = "Dependency Check"
         if len(ok_requirements) > 0:
@@ -1332,7 +1331,7 @@ def run_openea():
 
 
 ############################################
-#          Tranformers section with helper functions
+# Transformers section with helper functions
 ############################################
 
 def transformers_create_dataset(using_tensorflow, tokenizer, left_sentences, right_sentences, labels=None):
@@ -1340,7 +1339,7 @@ def transformers_create_dataset(using_tensorflow, tokenizer, left_sentences, rig
     # padding (padding=True) is not applied here because the tokenizer is given to the trainer 
     # which does the padding for each batch (more efficient)
     # TODO: remove padding here and generate no dataset but just give the encodings to the trainer
-    encodings  = tokenizer(left_sentences, right_sentences, return_tensors=tensor_type, padding=True, truncation="longest_first")
+    encodings = tokenizer(left_sentences, right_sentences, return_tensors=tensor_type, padding=True, truncation="longest_first")
     
     if using_tensorflow:
         import tensorflow as tf
@@ -1425,8 +1424,22 @@ def transformers_init(request):
     if "transformersCache" in request.headers:
         os.environ["TRANSFORMERS_CACHE"] = request.headers.get("transformersCache")
 
-@app.route("/transformers-prediction", methods=["GET"])
-def transformers_prediction():
+def run_function_multi_process(request, func):
+    multi_processing = request.headers.get("multiProcessing")
+    if multi_processing == 'no_multi_process':
+        return func(request)
+    else:
+        import multiprocessing as mp 
+        def wrapper_func(queue, request):
+            queue.put(func(request))
+        ctx = mp.get_context() if multi_processing == 'default_multi_process' else mp.get_context(multi_processing)
+        queue = ctx.Queue()
+        process = ctx.Process(target=wrapper_func, args=(queue, request,))
+        process.start()
+        process.join()
+        return queue.get()
+
+def inner_transformers_prediction(request):
     try:
         transformers_init(request)
 
@@ -1434,7 +1447,7 @@ def transformers_prediction():
         prediction_file_path = request.headers.get("predictionFilePath")
         tmp_dir = request.headers.get("tmpDir")
         using_tensorflow = request.headers.get("usingTF").lower() == "true"
-        change_class = bool(request.headers.get("changeClass"))
+        change_class = request.headers.get("changeClass").lower() == "true"
         training_arguments = json.loads(request.headers.get("trainingArguments"))
 
         from transformers import AutoTokenizer
@@ -1450,6 +1463,7 @@ def transformers_prediction():
         with tempfile.TemporaryDirectory(dir=tmp_dir) as tmpdirname:
             fixed_arguments = {
                 'output_dir': os.path.join(tmpdirname, "trainer_output_dir"),
+                'disable_tqdm' : True,
             }
             training_args = transformers_get_training_arguments(using_tensorflow, training_arguments, fixed_arguments)
 
@@ -1469,7 +1483,7 @@ def transformers_prediction():
 
             app.logger.info("Run prediction")
             pred_out = trainer.predict(predict_dataset)
-        class_index = 1 if change_class else 0
+        class_index = 0 if change_class else 1
         # sigmoid: scores = 1 / (1 + np.exp(-pred_out.predictions, axis=1[:, class_index]))
         # compute softmax to get class probabilities (scores between 0 and 1)
         scores = softmax(pred_out.predictions, axis=1)[:, class_index]
@@ -1478,6 +1492,7 @@ def transformers_prediction():
         import traceback
         return "ERROR " + traceback.format_exc()
 
+<<<<<<< HEAD
 @app.route("/sbert-prediction", methods=["GET"])
 def sbert_prediction():
     try:
@@ -1533,8 +1548,12 @@ def huggingface_prediction():
         import traceback
         return "ERROR " + traceback.format_exc()
 
-@app.route("/transformers-finetuning", methods=["GET"])
-def transformers_finetuning():
+
+@app.route("/transformers-prediction", methods=["GET"])
+def transformers_prediction():
+    return run_function_multi_process(request, inner_transformers_prediction)
+
+def inner_transformers_finetuning(request):
     try:
         transformers_init(request)
         
@@ -1588,6 +1607,9 @@ def transformers_finetuning():
         import traceback
         return "ERROR " + traceback.format_exc()
 
+@app.route("/transformers-finetuning", methods=["GET"])
+def transformers_finetuning():
+    return run_function_multi_process(request, inner_transformers_finetuning)
 
 @app.route("/transformers-finetuning-hp-search", methods=["GET"])
 def transformers_finetuning_hp_search():
