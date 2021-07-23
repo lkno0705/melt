@@ -29,7 +29,6 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
-import java.util.logging.Level;
 import java.util.stream.Collectors;
 
 import org.apache.http.client.methods.HttpPost;
@@ -113,13 +112,14 @@ public class PythonServer {
     private static int port = DEFAULT_PORT;
 
     /**
-     * In case someone wants to configure the python command programatically.
+     * In case someone wants to configure the python command programmatically.
      * Precedence always has the external file.
      */
     private static String pythonCommandBackup = null;
 
     /**
-     * If set to true, all python files (e.g. python server melt and requirements.txt file) will be overridden with every execution.
+     * If set to true, all python files (e.g. python server melt and requirements.txt file) will be overridden with
+     * every execution.
      * Set it to false for testing and debugging new features in python server.
      */
     private static boolean overridePythonFiles = true;
@@ -174,7 +174,9 @@ public class PythonServer {
      * @return a list of confidences
      */
     public List<Double> transformersPrediction(TransformersFilter filter, File predictionFilePath) throws PythonServerException {
-        //curl http://127.0.0.1:41193/transformers-prediction
+        //curl http://127.0.0.1:41193/transformers-prediction -H "modelName: bert-base-cased-finetuned-mrpc" -H "usingTF: false" \
+        // -H "trainingArguments: {}"  -H "tmpDir: ./my_tmp_dir" -H "cudaVisibleDevices: 0" -H "transformersCache: ./cache_transformers" \
+        // -H "predictionFilePath: ./train.txt" -H "changeClass: false" -H "multiProcessing: default_multi_process" 
         HttpGet request = new HttpGet(serverUrl + "/transformers-prediction");
         transformersUpdateBaseRequest(filter, request);
         
@@ -197,6 +199,7 @@ public class PythonServer {
         request.addHeader("usingTF", Boolean.toString(base.isUsingTensorflow()));
         request.addHeader("trainingArguments", base.getTrainingArguments().toJsonString());
         request.addHeader("tmpDir", getCanonicalPath(base.getTmpDir()));
+        request.addHeader("multiProcessing", base.getMultiProcessing().toString());
         
         String cudaVisibleDevices = base.getCudaVisibleDevices();
         if(cudaVisibleDevices != null){
@@ -1294,7 +1297,7 @@ public class PythonServer {
     }
 
     /**
-     * Sets the python command programatically. This is used when no extrnal file python_command.txt is found.
+     * Sets the python command programmatically. This is used when no external file python_command.txt is found.
      *
      * @param pythonCommandBackup the python command.
      */
