@@ -1393,7 +1393,7 @@ def transformers_read_file(file_path, with_labels):
     return data_left, data_right, labels
 
 
-def transformers_get_training_arguments(using_tensorflow, user_parameters, system_parameters):
+def transformers_get_training_arguments(using_tensorflow, initial_parameters, user_parameters, melt_parameters):
     import dataclasses
     if using_tensorflow:
         from transformers import TFTrainingArguments
@@ -1401,9 +1401,10 @@ def transformers_get_training_arguments(using_tensorflow, user_parameters, syste
     else:
         from transformers import TrainingArguments
         allowed_arguments = set([field.name for field in dataclasses.fields(TrainingArguments)])
-
-    training_arguments = dict(user_parameters)
-    training_arguments.update(system_parameters)
+    
+    training_arguments = dict(initial_parameters)
+    training_arguments.update(user_parameters)
+    training_arguments.update(melt_parameters)
 
     not_available = training_arguments.keys() - allowed_arguments
     if len(not_available) > 0:
@@ -1418,45 +1419,42 @@ def transformers_get_training_arguments(using_tensorflow, user_parameters, syste
     return training_args
 
 
-def transformers_init(request):
-    import os
+def transformers_init(request_headers):
+    if "cuda-visible-devices" in request_headers:
+        os.environ["CUDA_VISIBLE_DEVICES"] = request_headers["cuda-visible-devices"]
 
-    if "cudaVisibleDevices" in request.headers:
-        os.environ["CUDA_VISIBLE_DEVICES"] = request.headers.get(
-            "cudaVisibleDevices"
-        )
+    if "transformers-cache" in request_headers:
+        os.environ["TRANSFORMERS_CACHE"] = request_headers["transformers-cache"]
 
-    if "transformersCache" in request.headers:
-        os.environ["TRANSFORMERS_CACHE"] = request.headers.get("transformersCache")
+# needs to be at the top level because only top level function can be pickled
+def multi_process_wrapper_function(queue, func, argument):
+    queue.put(func(argument))
 
 
 def run_function_multi_process(request, func):
-    multi_processing = request.headers.get("multiProcessing")
+    multi_processing = request.headers["multi-processing"]
     if multi_processing == 'no_multi_process':
-        return func(request)
+        return func(dict(request.headers.items(lower=True)))
     else:
         import multiprocessing as mp
-        def wrapper_func(queue, request):
-            queue.put(func(request))
-
         ctx = mp.get_context() if multi_processing == 'default_multi_process' else mp.get_context(multi_processing)
         queue = ctx.Queue()
-        process = ctx.Process(target=wrapper_func, args=(queue, request,))
+        process = ctx.Process(target=multi_process_wrapper_function, args=(queue, func, dict(request.headers.items(lower=True)),))
         process.start()
         process.join()
         return queue.get()
 
 
-def inner_transformers_prediction(request):
+def inner_transformers_prediction(request_headers):
     try:
-        transformers_init(request)
+        transformers_init(request_headers)
 
-        model_name = request.headers.get("modelName")
-        prediction_file_path = request.headers.get("predictionFilePath")
-        tmp_dir = request.headers.get("tmpDir")
-        using_tensorflow = request.headers.get("usingTF").lower() == "true"
-        change_class = request.headers.get("changeClass").lower() == "true"
-        training_arguments = json.loads(request.headers.get("trainingArguments"))
+        model_name = request_headers["model-name"]
+        prediction_file_path = request_headers["prediction-file-path"]
+        tmp_dir = request_headers["tmp-dir"]
+        using_tensorflow = request_headers["using-tf"].lower() == "true"
+        change_class = request_headers["change-class"].lower() == "true"
+        training_arguments = json.loads(request_headers["training-arguments"])
 
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -1468,14 +1466,19 @@ def inner_transformers_prediction(request):
         app.logger.info("Transformers dataset contains %s rows.", len(data_left))
 
         with tempfile.TemporaryDirectory(dir=tmp_dir) as tmpdirname:
+            initial_arguments = {
+                'report_to': 'none'
+            }
             fixed_arguments = {
                 'output_dir': os.path.join(tmpdirname, "trainer_output_dir"),
                 'disable_tqdm': True,
             }
-            training_args = transformers_get_training_arguments(using_tensorflow, training_arguments, fixed_arguments)
+            training_args = transformers_get_training_arguments(using_tensorflow, initial_arguments, training_arguments, fixed_arguments)
 
             app.logger.info("Loading transformers model")
             if using_tensorflow:
+                import tensorflow as tf
+                app.logger.info("Num gpu avail: " + str(len(tf.config.list_physical_devices('GPU'))))
                 from transformers import TFTrainer, TFAutoModelForSequenceClassification
 
                 with training_args.strategy.scope():
@@ -1483,6 +1486,8 @@ def inner_transformers_prediction(request):
 
                 trainer = TFTrainer(model=model, tokenizer=tokenizer, args=training_args)
             else:
+                import torch
+                app.logger.info("Is gpu used: " + str(torch.cuda.is_available()))
                 from transformers import Trainer, AutoModelForSequenceClassification
                 model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=2)
 
@@ -1494,7 +1499,7 @@ def inner_transformers_prediction(request):
         # sigmoid: scores = 1 / (1 + np.exp(-pred_out.predictions, axis=1[:, class_index]))
         # compute softmax to get class probabilities (scores between 0 and 1)
         scores = softmax(pred_out.predictions, axis=1)[:, class_index]
-        return jsonify(scores.tolist())
+        return scores.tolist()
     except Exception as e:
         import traceback
         return "ERROR " + traceback.format_exc()
@@ -1559,19 +1564,23 @@ def huggingface_prediction():
 
 @app.route("/transformers-prediction", methods=["GET"])
 def transformers_prediction():
-    return run_function_multi_process(request, inner_transformers_prediction)
+    result = run_function_multi_process(request, inner_transformers_prediction)
+    if isinstance(result, str):
+        return result
+    else:
+        return jsonify(result)
 
 
-def inner_transformers_finetuning(request):
+def inner_transformers_finetuning(request_headers):
     try:
-        transformers_init(request)
-
-        initial_model_name = request.headers.get("modelName")
-        resulting_model_location = request.headers.get("resultingModelLocation")
-        tmp_dir = request.headers.get("tmpDir")
-        training_file = request.headers.get("trainingFile")
-        using_tensorflow = request.headers.get("usingTF").lower() == "true"
-        training_arguments = json.loads(request.headers.get("trainingArguments"))
+        transformers_init(request_headers)
+        
+        initial_model_name = request_headers["model-name"]
+        resulting_model_location = request_headers["resulting-model-location"]
+        tmp_dir = request_headers["tmp-dir"]
+        training_file = request_headers["training-file"]
+        using_tensorflow = request_headers["using-tf"].lower() == "true"
+        training_arguments = json.loads(request_headers["training-arguments"])
 
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(initial_model_name)
@@ -1583,13 +1592,17 @@ def inner_transformers_finetuning(request):
         app.logger.info("Transformers dataset contains %s examples.", len(training_dataset))
 
         with tempfile.TemporaryDirectory(dir=tmp_dir) as tmpdirname:
+            initial_arguments = {
+                'report_to': 'none'
+            }
+
             fixed_arguments = {
                 'output_dir': os.path.join(tmpdirname, "trainer_output_dir"),
                 'save_strategy': 'no',
                 'disable_tqdm': True,
             }
-
-            training_args = transformers_get_training_arguments(using_tensorflow, training_arguments, fixed_arguments)
+        
+            training_args = transformers_get_training_arguments(using_tensorflow, initial_arguments, training_arguments, fixed_arguments)
 
             app.logger.info("Loading transformers model")
             if using_tensorflow:
@@ -1620,26 +1633,30 @@ def inner_transformers_finetuning(request):
 
 @app.route("/transformers-finetuning", methods=["GET"])
 def transformers_finetuning():
-    return run_function_multi_process(request, inner_transformers_finetuning)
+    result = run_function_multi_process(request, inner_transformers_finetuning)
+    if isinstance(result, str):
+        return result
+    else:
+        return jsonify(result)
 
 
 @app.route("/transformers-finetuning-hp-search", methods=["GET"])
 def transformers_finetuning_hp_search():
     try:
-        transformers_init(request)
+        transformers_init(request.headers)
+        
+        initial_model_name = request.headers["model-name"]
+        resulting_model_location = request.headers["resulting-model-location"]
+        tmp_dir = request.headers["tmp-dir"]
+        training_file = request.headers["training-file"]
+        using_tensorflow = request.headers["using-tf"].lower() == "true"
+        training_arguments = json.loads(request.headers["training-arguments"])
+        number_of_trials = int(request.headers["number-of-trials"])
+        test_size = float(request.headers["test-size"])
+        optimizing_metric = request.headers["optimizing-metric"]
 
-        initial_model_name = request.headers.get("modelName")
-        resulting_model_location = request.headers.get("resultingModelLocation")
-        tmp_dir = request.headers.get("tmpDir")
-        training_file = request.headers.get("trainingFile")
-        using_tensorflow = request.headers.get("usingTF").lower() == "true"
-        training_arguments = json.loads(request.headers.get("trainingArguments"))
-        number_of_trials = int(request.headers.get("numberOfTrials"))
-        test_size = float(request.headers.get("testSize"))
-        optimizing_metric = request.headers.get("optimizingMetric")
-
-        hp_space = json.loads(request.headers.get("hpSpace"))
-        hp_mutations = json.loads(request.headers.get("hpMutations"))
+        hp_space = json.loads(request.headers["hp-space"])
+        hp_mutations = json.loads(request.headers["hp-mutations"])
 
         if optimizing_metric not in set(['loss', 'accuracy', 'f1', 'precision', 'recall', 'auc']):
             raise ValueError("optimize_metric is not one of loss, accuracy, f1, precision, recall, auc.")
@@ -1666,6 +1683,10 @@ def transformers_finetuning_hp_search():
                         len(eval_dataset))
 
         with tempfile.TemporaryDirectory(dir=tmp_dir) as tmpdirname:
+            initial_arguments = {
+                'report_to': 'none'
+            }
+
             fixed_arguments = {
                 'output_dir': os.path.join(tmpdirname, "trainer_output_dir"),
                 'disable_tqdm': True,
@@ -1675,7 +1696,8 @@ def transformers_finetuning_hp_search():
                 'evaluation_strategy': 'epoch',
                 'report_to': 'none',
             }
-            training_args = transformers_get_training_arguments(using_tensorflow, training_arguments, fixed_arguments)
+
+            training_args = transformers_get_training_arguments(using_tensorflow, initial_arguments, training_arguments, fixed_arguments)
 
             from sklearn.metrics import accuracy_score, roc_auc_score, precision_recall_fscore_support
             def compute_metrics(pred):
