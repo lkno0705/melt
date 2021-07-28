@@ -42,6 +42,7 @@ def display_server_status():
     """
     return "MELT ML Server running. Ready to accept requests."
 
+
 @app.route("/check-requirements", methods=["GET"])
 def check_requirements() -> str:
     """Can be used to check whether the server is fully functional.
@@ -79,6 +80,7 @@ def check_requirements() -> str:
         app.logger.info(message)
         return message
 
+
 class MySentences(object):
     """Data structure to iterate over the lines of a file in a memory-friendly way. The files can be gzipped."""
 
@@ -101,18 +103,18 @@ class MySentences(object):
                     if file_name[-2:] in "gz":
                         app.logger.info("Gzip file detected! Using gzip.open().")
                         for line in gzip.open(
-                            os.path.join(self.file_or_directory_path, file_name),
-                            mode="rt",
-                            encoding="utf-8",
+                                os.path.join(self.file_or_directory_path, file_name),
+                                mode="rt",
+                                encoding="utf-8",
                         ):
                             line = line.rstrip("\n")
                             words = line.split(" ")
                             yield words
                     else:
                         for line in open(
-                            os.path.join(self.file_or_directory_path, file_name),
-                            mode="rt",
-                            encoding="utf-8",
+                                os.path.join(self.file_or_directory_path, file_name),
+                                mode="rt",
+                                encoding="utf-8",
                         ):
                             line = line.rstrip("\n")
                             words = line.split(" ")
@@ -122,14 +124,14 @@ class MySentences(object):
                 if self.file_or_directory_path[-2:] in "gz":
                     app.logger.info("Gzip file detected! Using gzip.open().")
                     for line in gzip.open(
-                        self.file_or_directory_path, mode="rt", encoding="utf-8"
+                            self.file_or_directory_path, mode="rt", encoding="utf-8"
                     ):
                         line = line.rstrip("\n")
                         words = line.split(" ")
                         yield words
                 else:
                     for line in open(
-                        self.file_or_directory_path, mode="rt", encoding="utf-8"
+                            self.file_or_directory_path, mode="rt", encoding="utf-8"
                     ):
                         line = line.rstrip("\n")
                         words = line.split(" ")
@@ -279,7 +281,6 @@ def get_vectors(model_path=None, vector_path=None):
 
 @app.route("/get-similarity", methods=["GET"])
 def get_similarity_given_model():
-
     concept_1 = request.headers.get("concept_1")
     concept_2 = request.headers.get("concept_2")
     model_path = request.headers.get("model_path")
@@ -854,7 +855,7 @@ def __canoncorr(X, Y):
     # sio.savemat('np_vector.mat', {'X': X, 'Y': Y})
     # additional constraint because otherwise line ' A = linalg.solve(Rx, U[:, :d]) ' does not work
     assert (
-        X.shape[0] > X.shape[1] and Y.shape[0] > Y.shape[1]
+            X.shape[0] > X.shape[1] and Y.shape[0] > Y.shape[1]
     ), "Vector dimension must be greater than trainings lexicon - maybe decrease vector size."
 
     k = X.shape[0]
@@ -886,14 +887,14 @@ def __canoncorr(X, Y):
 
 
 def __project_embeddings_to_lexicon_subset(
-    word_vector_source, word_vector_target, lexicon
+        word_vector_source, word_vector_target, lexicon
 ):
     source_subset_vectors = []
     target_subset_vectors = []
     for lang_source_word, lang_target_word in lexicon:
         if (
-            lang_source_word not in word_vector_source
-            or lang_target_word not in word_vector_target
+                lang_source_word not in word_vector_source
+                or lang_target_word not in word_vector_target
         ):
             continue
         source_subset_vectors.append(word_vector_source[lang_source_word])
@@ -1016,7 +1017,7 @@ def neural_net_projection(word_vector_src, word_vector_tgt, lexicon):
 
 
 def cca_projection(
-    word_vector_source, word_vector_target, lexicon, top_correlation_ratio=0.5
+        word_vector_source, word_vector_target, lexicon, top_correlation_ratio=0.5
 ):
     word_vector_source.init_sims(replace=True)
     word_vector_target.init_sims(replace=True)
@@ -1033,16 +1034,16 @@ def cca_projection(
 
     amount_A = int(np.ceil(top_correlation_ratio * A.shape[1]))
     U = (
-        word_vector_target.vectors
-        - word_vector_target.vectors.mean(axis=0, keepdims=True)
+            word_vector_target.vectors
+            - word_vector_target.vectors.mean(axis=0, keepdims=True)
     ).dot(A[:, 0:amount_A])
     U = __normr(U)
     projected_target_vectors = __create_keyed_vector(word_vector_target, U)
 
     amount_B = int(np.ceil(top_correlation_ratio * B.shape[1]))
     V = (
-        word_vector_source.vectors
-        - word_vector_source.vectors.mean(axis=0, keepdims=True)
+            word_vector_source.vectors
+            - word_vector_source.vectors.mean(axis=0, keepdims=True)
     ).dot(B[:, 0:amount_B])
     V = __normr(V)
     projected_source_vectors = __create_keyed_vector(word_vector_source, V)
@@ -1328,8 +1329,6 @@ def run_openea():
         return "ERROR " + traceback.format_exc()
 
 
-
-
 ############################################
 # Transformers section with helper functions
 ############################################
@@ -1339,14 +1338,15 @@ def transformers_create_dataset(using_tensorflow, tokenizer, left_sentences, rig
     # padding (padding=True) is not applied here because the tokenizer is given to the trainer 
     # which does the padding for each batch (more efficient)
     # TODO: remove padding here and generate no dataset but just give the encodings to the trainer
-    encodings = tokenizer(left_sentences, right_sentences, return_tensors=tensor_type, padding=True, truncation="longest_first")
-    
+    encodings = tokenizer(left_sentences, right_sentences, return_tensors=tensor_type, padding=True,
+                          truncation="longest_first")
+
     if using_tensorflow:
         import tensorflow as tf
         if labels:
-            return tf.data.Dataset.from_tensor_slices((dict(encodings),labels))
+            return tf.data.Dataset.from_tensor_slices((dict(encodings), labels))
         else:
-            return tf.data.Dataset.from_tensor_slices(dict(encodings)) # TODO: check
+            return tf.data.Dataset.from_tensor_slices(dict(encodings))  # TODO: check
     else:
         import torch
         if labels:
@@ -1362,6 +1362,7 @@ def transformers_create_dataset(using_tensorflow, tokenizer, left_sentences, rig
 
                 def __len__(self):
                     return len(self.labels)
+
             return MyDatasetWithLabels(encodings, labels)
         else:
             class MyDataset(torch.utils.data.Dataset):
@@ -1374,7 +1375,9 @@ def transformers_create_dataset(using_tensorflow, tokenizer, left_sentences, rig
 
                 def __len__(self):
                     return len(self.encodings.input_ids)
+
             return MyDataset(encodings)
+
 
 def transformers_read_file(file_path, with_labels):
     data_left = []
@@ -1389,6 +1392,7 @@ def transformers_read_file(file_path, with_labels):
                 labels.append(int(row[2]))
     return data_left, data_right, labels
 
+
 def transformers_get_training_arguments(using_tensorflow, user_parameters, system_parameters):
     import dataclasses
     if using_tensorflow:
@@ -1397,14 +1401,14 @@ def transformers_get_training_arguments(using_tensorflow, user_parameters, syste
     else:
         from transformers import TrainingArguments
         allowed_arguments = set([field.name for field in dataclasses.fields(TrainingArguments)])
-    
+
     training_arguments = dict(user_parameters)
     training_arguments.update(system_parameters)
-    
+
     not_available = training_arguments.keys() - allowed_arguments
     if len(not_available) > 0:
-        app.logger.warning("The following attributes are not set as training arguments because" + 
-                        "they do not exist in the currently installed version of transformer: " + str(not_available))
+        app.logger.warning("The following attributes are not set as training arguments because" +
+                           "they do not exist in the currently installed version of transformer: " + str(not_available))
         for key_not_avail in not_available:
             del training_arguments[key_not_avail]
     if using_tensorflow:
@@ -1412,6 +1416,7 @@ def transformers_get_training_arguments(using_tensorflow, user_parameters, syste
     else:
         training_args = TrainingArguments(**training_arguments)
     return training_args
+
 
 def transformers_init(request):
     import os
@@ -1424,20 +1429,23 @@ def transformers_init(request):
     if "transformersCache" in request.headers:
         os.environ["TRANSFORMERS_CACHE"] = request.headers.get("transformersCache")
 
+
 def run_function_multi_process(request, func):
     multi_processing = request.headers.get("multiProcessing")
     if multi_processing == 'no_multi_process':
         return func(request)
     else:
-        import multiprocessing as mp 
+        import multiprocessing as mp
         def wrapper_func(queue, request):
             queue.put(func(request))
+
         ctx = mp.get_context() if multi_processing == 'default_multi_process' else mp.get_context(multi_processing)
         queue = ctx.Queue()
         process = ctx.Process(target=wrapper_func, args=(queue, request,))
         process.start()
         process.join()
         return queue.get()
+
 
 def inner_transformers_prediction(request):
     try:
@@ -1452,18 +1460,17 @@ def inner_transformers_prediction(request):
 
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(model_name)
-        
+
         app.logger.info("Prepare transformers dataset and tokenize")
         data_left, data_right, _ = transformers_read_file(prediction_file_path, False)
         assert len(data_left) == len(data_right)
         predict_dataset = transformers_create_dataset(using_tensorflow, tokenizer, data_left, data_right)
         app.logger.info("Transformers dataset contains %s rows.", len(data_left))
 
-        
         with tempfile.TemporaryDirectory(dir=tmp_dir) as tmpdirname:
             fixed_arguments = {
                 'output_dir': os.path.join(tmpdirname, "trainer_output_dir"),
-                'disable_tqdm' : True,
+                'disable_tqdm': True,
             }
             training_args = transformers_get_training_arguments(using_tensorflow, training_arguments, fixed_arguments)
 
@@ -1492,7 +1499,7 @@ def inner_transformers_prediction(request):
         import traceback
         return "ERROR " + traceback.format_exc()
 
-<<<<<<< HEAD
+
 @app.route("/sbert-prediction", methods=["GET"])
 def sbert_prediction():
     try:
@@ -1518,6 +1525,7 @@ def sbert_prediction():
     except Exception as e:
         import traceback
         return "ERROR " + traceback.format_exc()
+
 
 @app.route("/huggingface-prediction", methods=["GET"])
 def huggingface_prediction():
@@ -1553,10 +1561,11 @@ def huggingface_prediction():
 def transformers_prediction():
     return run_function_multi_process(request, inner_transformers_prediction)
 
+
 def inner_transformers_finetuning(request):
     try:
         transformers_init(request)
-        
+
         initial_model_name = request.headers.get("modelName")
         resulting_model_location = request.headers.get("resultingModelLocation")
         tmp_dir = request.headers.get("tmpDir")
@@ -1566,7 +1575,7 @@ def inner_transformers_finetuning(request):
 
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(initial_model_name)
-        
+
         app.logger.info("Prepare transformers dataset and tokenize")
         data_left, data_right, labels = transformers_read_file(training_file, True)
         assert len(data_left) == len(data_right) == len(labels)
@@ -1576,10 +1585,10 @@ def inner_transformers_finetuning(request):
         with tempfile.TemporaryDirectory(dir=tmp_dir) as tmpdirname:
             fixed_arguments = {
                 'output_dir': os.path.join(tmpdirname, "trainer_output_dir"),
-                'save_strategy' : 'no',
-                'disable_tqdm' : True,
+                'save_strategy': 'no',
+                'disable_tqdm': True,
             }
-        
+
             training_args = transformers_get_training_arguments(using_tensorflow, training_arguments, fixed_arguments)
 
             app.logger.info("Loading transformers model")
@@ -1589,11 +1598,12 @@ def inner_transformers_finetuning(request):
                 with training_args.strategy.scope():
                     model = TFAutoModelForSequenceClassification.from_pretrained(initial_model_name, num_labels=2)
 
-                trainer = TFTrainer(model=model, tokenizer=tokenizer, train_dataset=training_dataset, args=training_args)
+                trainer = TFTrainer(model=model, tokenizer=tokenizer, train_dataset=training_dataset,
+                                    args=training_args)
             else:
                 from transformers import Trainer, AutoModelForSequenceClassification
                 model = AutoModelForSequenceClassification.from_pretrained(initial_model_name, num_labels=2)
-                
+
                 # tokenizer is added to the trainer because only in this case the tokenizer will be saved along the model to be reused.
                 trainer = Trainer(model=model, tokenizer=tokenizer, train_dataset=training_dataset, args=training_args)
 
@@ -1607,15 +1617,17 @@ def inner_transformers_finetuning(request):
         import traceback
         return "ERROR " + traceback.format_exc()
 
+
 @app.route("/transformers-finetuning", methods=["GET"])
 def transformers_finetuning():
     return run_function_multi_process(request, inner_transformers_finetuning)
+
 
 @app.route("/transformers-finetuning-hp-search", methods=["GET"])
 def transformers_finetuning_hp_search():
     try:
         transformers_init(request)
-        
+
         initial_model_name = request.headers.get("modelName")
         resulting_model_location = request.headers.get("resultingModelLocation")
         tmp_dir = request.headers.get("tmpDir")
@@ -1636,37 +1648,42 @@ def transformers_finetuning_hp_search():
 
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(initial_model_name)
-        
+
         app.logger.info("Prepare transformers dataset and tokenize")
         data_left, data_right, labels = transformers_read_file(training_file, True)
         assert len(data_left) == len(data_right) == len(labels)
-        
-        from sklearn.model_selection import train_test_split
-        [data_left_train, data_left_test, data_right_train, data_right_test, labels_train, labels_test] = train_test_split(data_left, data_right, labels, stratify=labels, test_size=test_size)
-    
-        training_dataset = transformers_create_dataset(using_tensorflow, tokenizer, data_left_train, data_right_train, labels_train)
-        eval_dataset = transformers_create_dataset(using_tensorflow, tokenizer, data_left_test, data_right_test, labels_test)
 
-        app.logger.info("Transformers dataset for training has %s and for eval %s examples.", len(training_dataset), len(eval_dataset))
-        
+        from sklearn.model_selection import train_test_split
+        [data_left_train, data_left_test, data_right_train, data_right_test, labels_train,
+         labels_test] = train_test_split(data_left, data_right, labels, stratify=labels, test_size=test_size)
+
+        training_dataset = transformers_create_dataset(using_tensorflow, tokenizer, data_left_train, data_right_train,
+                                                       labels_train)
+        eval_dataset = transformers_create_dataset(using_tensorflow, tokenizer, data_left_test, data_right_test,
+                                                   labels_test)
+
+        app.logger.info("Transformers dataset for training has %s and for eval %s examples.", len(training_dataset),
+                        len(eval_dataset))
+
         with tempfile.TemporaryDirectory(dir=tmp_dir) as tmpdirname:
             fixed_arguments = {
                 'output_dir': os.path.join(tmpdirname, "trainer_output_dir"),
-                'disable_tqdm' : True,
-                'skip_memory_metrics' : True, # see https://github.com/huggingface/transformers/issues/11249
-                'save_strategy' : 'epoch',
-                'do_eval' : True,
+                'disable_tqdm': True,
+                'skip_memory_metrics': True,  # see https://github.com/huggingface/transformers/issues/11249
+                'save_strategy': 'epoch',
+                'do_eval': True,
                 'evaluation_strategy': 'epoch',
                 'report_to': 'none',
             }
             training_args = transformers_get_training_arguments(using_tensorflow, training_arguments, fixed_arguments)
-            
+
             from sklearn.metrics import accuracy_score, roc_auc_score, precision_recall_fscore_support
             def compute_metrics(pred):
                 labels = pred.label_ids
                 preds = pred.predictions.argmax(-1)
                 acc = accuracy_score(labels, preds)
-                precision, recall, f1, _ = precision_recall_fscore_support(labels, preds, average='binary', pos_label=1, zero_division=0)
+                precision, recall, f1, _ = precision_recall_fscore_support(labels, preds, average='binary', pos_label=1,
+                                                                           zero_division=0)
                 preds_proba = softmax(pred.predictions, axis=1)[:, 1]
                 auc = roc_auc_score(labels, preds_proba)
                 return {
@@ -1680,7 +1697,7 @@ def transformers_finetuning_hp_search():
             app.logger.info("Loading transformers model")
             if using_tensorflow:
                 from transformers import TFTrainer, TFAutoModelForSequenceClassification
-                
+
                 def model_init():
                     # TODO: check if necessary with training_args.strategy.scope():
                     return TFAutoModelForSequenceClassification.from_pretrained(initial_model_name, num_labels=2)
@@ -1697,7 +1714,7 @@ def transformers_finetuning_hp_search():
                 from transformers import Trainer, AutoModelForSequenceClassification
                 def model_init():
                     return AutoModelForSequenceClassification.from_pretrained(initial_model_name, num_labels=2)
-                
+
                 # tokenizer is added to the trainer because only in this case the tokenizer will be saved along the model to be reused.
                 trainer = Trainer(
                     model_init=model_init,
@@ -1707,18 +1724,18 @@ def transformers_finetuning_hp_search():
                     compute_metrics=compute_metrics,
                     args=training_args
                 )
-             
+
             # based on the following example: https://docs.ray.io/en/master/tune/examples/pbt_transformers.html
             app.logger.info("Run hyperparameter search")
-            
+
             ray_local_dir = os.path.join(tmpdirname, 'ray_local_dir')
             run_name = 'run_' + datetime.today().strftime("%Y-%m-%d_%H-%M-%S")
-            
+
             import ray
             ray.init(include_dashboard=False, ignore_reinit_error=True)
             from ray import tune
             from ray.tune.schedulers import PopulationBasedTraining
-            
+
             # process search space
             def process_search_space(search_space):
                 for key, value in search_space.items():
@@ -1726,9 +1743,10 @@ def transformers_finetuning_hp_search():
                     if function_to_call is None:
                         raise ValueError('the following function name is not part of ray.tune: ' + str(value['name']))
                     search_space[key] = function_to_call(**value['params'])
+
             process_search_space(hp_space)
             process_search_space(hp_mutations)
-            
+
             app.logger.info("hp_space: " + str(hp_space))
             app.logger.info("hp_mutations: " + str(hp_mutations))
 
@@ -1754,10 +1772,13 @@ def transformers_finetuning_hp_search():
             )
 
             ray.shutdown()
-            
-            matching_folders = glob.glob(os.path.join(ray_local_dir, run_name, "_objective_" + best_run.run_id +"*", "checkpoint_*", "checkpoint-*"))
+
+            matching_folders = glob.glob(
+                os.path.join(ray_local_dir, run_name, "_objective_" + best_run.run_id + "*", "checkpoint_*",
+                             "checkpoint-*"))
             if not matching_folders:
-                app.logger.warning("Could not find a checkpoint directory to load to best model from. Return without saving any model.")
+                app.logger.warning(
+                    "Could not find a checkpoint directory to load to best model from. Return without saving any model.")
                 return "ERROR Could not find a checkpoint directory to load to best model from"
             app.logger.info("Found best model in checkpoint folder: " + str(matching_folders[0]))
 
@@ -1782,7 +1803,7 @@ def transformers_finetuning_hp_search():
                     compute_metrics=compute_metrics,
                     args=training_args
                 )
-            
+
             app.logger.info("Best model scored:")
             trainer.evaluate()
 
@@ -1792,6 +1813,7 @@ def transformers_finetuning_hp_search():
     except Exception as e:
         import traceback
         return "ERROR " + traceback.format_exc()
+
 
 @app.route("/hello", methods=["GET"])
 def hello_demo() -> str:
