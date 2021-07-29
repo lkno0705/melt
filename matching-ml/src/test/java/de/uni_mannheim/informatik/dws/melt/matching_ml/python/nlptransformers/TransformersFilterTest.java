@@ -9,6 +9,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Collectors;
+
+import de.uni_mannheim.informatik.dws.melt.matching_ml.python.PythonServer;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVRecord;
 import org.junit.jupiter.api.Test;
@@ -25,7 +27,7 @@ public class TransformersFilterTest {
         //https://huggingface.co/datasets/glue
         File mrpcTestFile = new File(getClass().getClassLoader().getResource("mrpc-test-subset.csv").getFile());
         TransformersFilter zeroShot = new TransformersFilter(null, "bert-base-cased-finetuned-mrpc");
-
+        PythonServer.setPythonCommandBackup("python3");
         List<Double> confidences = zeroShot.predictConfidences(mrpcTestFile);
         List<Integer> gold = getGoldStandard(mrpcTestFile);
         double acc = accuracy(gold, confidences);
