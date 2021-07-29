@@ -96,7 +96,7 @@ public class TransformersFilter extends TransformersBase implements Filter {
                 orderedCorrespondences.get(i).addAdditionalConfidence(this.getClass(), confidenceList.get(i));
             }
         } finally {
-            inputFile.delete();
+//            inputFile.delete();
         }
         return inputAlignment;
     }
