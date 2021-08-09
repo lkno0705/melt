@@ -4,8 +4,18 @@ import de.uni_mannheim.informatik.dws.melt.matching_base.FileUtil;
 import de.uni_mannheim.informatik.dws.melt.matching_jena.MatcherYAAAJena;
 import java.io.File;
 import de.uni_mannheim.informatik.dws.melt.matching_jena.TextExtractor;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.stream.Collectors;
+import org.apache.commons.csv.CSVFormat;
+import org.apache.commons.csv.CSVParser;
+import org.apache.commons.csv.CSVPrinter;
+import org.apache.commons.csv.CSVRecord;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * This is a base class for all Transformers.
@@ -13,6 +23,8 @@ import java.util.stream.Collectors;
  */
 public abstract class TransformersBase extends MatcherYAAAJena {
 
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(TransformersBase.class);
 
     protected TextExtractor extractor;
     protected String modelName;
@@ -23,6 +35,7 @@ public abstract class TransformersBase extends MatcherYAAAJena {
     protected String cudaVisibleDevices;
     protected File transformersCache;
     protected TransformersMultiProcessing multiProcessing;
+    protected boolean multipleTextsToMultipleExamples;
 
     /**
      * Constructor with all required parameters.
@@ -43,7 +56,8 @@ public abstract class TransformersBase extends MatcherYAAAJena {
         this.usingTensorflow = false;
         this.cudaVisibleDevices = ""; //use all GPUs
         this.transformersCache = null; //use default
-        this.multiProcessing = TransformersMultiProcessing.DEFAULT_MULTI_PROCESS;
+        this.multiProcessing = TransformersMultiProcessing.SPAWN;
+        this.multipleTextsToMultipleExamples = false;
     }
     
     /**
@@ -229,5 +243,71 @@ public abstract class TransformersBase extends MatcherYAAAJena {
      */
     public void setMultiProcessing(TransformersMultiProcessing multiProcessing) {
         this.multiProcessing = multiProcessing;
+    }
+    
+    /**
+     * Enable or disable the mixed precision training.
+     * This will optimize the runtime of training and 
+     * @param mpt true to enable mixed precision training
+     */
+    public void setOptimizeForMixedPrecisionTraining(boolean mpt){
+        this.trainingArguments.addParameter("fp16", mpt);
+    }
+    
+    /**
+     * Returns the value if mixed precision training is enabled or diabled.
+     * @return true if mixed precision training is enabled.
+     */
+    public boolean isOptimizeForMixedPrecisionTraining(){
+        Object o = this.trainingArguments.getParameterOrDefault("fp16", false);
+        if(o instanceof Boolean){
+            return (boolean) o;
+        }else{
+            LOGGER.warn("parameter fp16 is not a boolean value");
+            return false;
+        }
+    }
+
+    /**
+     * Returns the value if all texts returned by the text extractor are used separately to generate the examples.
+     * Otherwise it will concatenate all texts together to form one example(the default).
+     * This should be only enabled when the extractor does not return many texts because otherwise a lot of examples are produced.
+     * @return true, if generation of multiple examples is enabled
+     */
+    public boolean isMultipleTextsToMultipleExamples() {
+        return multipleTextsToMultipleExamples;
+    }
+
+    /**
+     * Is set to true, then all texts returned by the text extractor are used separately to generate the examples.
+     * Otherwise it will concatenate all texts together to form one example(the default).
+     * This should be only enabled when the extractor does not return many texts because otherwise a lot of examples are produced.
+     * @param multipleTextsToMultipleExamples true, to enable the generation of multiple examples.
+     */
+    public void setMultipleTextsToMultipleExamples(boolean multipleTextsToMultipleExamples) {
+        this.multipleTextsToMultipleExamples = multipleTextsToMultipleExamples;
+    }
+    
+    /**
+     * This function copies a part of a csv file to another file.This is used to find the best batch size.
+     * @param source the source file
+     * @param target the target file
+     * @param numberOfCSVLines how many lines should be copied
+     * @return true if enough lines are found in the input file.
+     * @throws IOException in case of any io exception
+     */
+    protected boolean copyCSVLines(File source, File target, int numberOfCSVLines) throws IOException{
+        int i = 1;
+        try(CSVParser csvParser = CSVFormat.DEFAULT.parse(new InputStreamReader(new FileInputStream(source), StandardCharsets.UTF_8));
+            CSVPrinter csvPrinter = CSVFormat.DEFAULT.print(target, StandardCharsets.UTF_8)){
+            for (CSVRecord record : csvParser) {
+                csvPrinter.printRecord(record);
+                if(i >= numberOfCSVLines){
+                    break;
+                }
+                i++;
+            }
+        }
+        return i >= numberOfCSVLines;
     }
 }

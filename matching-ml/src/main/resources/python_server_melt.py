@@ -12,7 +12,7 @@ import pkg_resources
 from pkg_resources import DistributionNotFound
 import pathlib
 import tempfile
-import glob
+import re
 from datetime import datetime
 
 logging.basicConfig(
@@ -1408,8 +1408,8 @@ def transformers_get_training_arguments(using_tensorflow, initial_parameters, us
 
     not_available = training_arguments.keys() - allowed_arguments
     if len(not_available) > 0:
-        app.logger.warning("The following attributes are not set as training arguments because" +
-                           "they do not exist in the currently installed version of transformer: " + str(not_available))
+        app.logger.warning("The following attributes are not set as training arguments because " +
+                        "they do not exist in the currently installed version of transformer: " + str(not_available))
         for key_not_avail in not_available:
             del training_arguments[key_not_avail]
     if using_tensorflow:
@@ -1418,6 +1418,20 @@ def transformers_get_training_arguments(using_tensorflow, initial_parameters, us
         training_args = TrainingArguments(**training_arguments)
     return training_args
 
+def transformers_search_folder_with_highest_count(root_folder, count_regex):
+    highest_step = 0
+    highest_step_folder = ""
+    for item in os.listdir(root_folder):
+        
+        item_path = os.path.join(root_folder, item)
+        if os.path.isdir(item_path):
+            checkpoint_search = re.search(count_regex, item)
+            if checkpoint_search:
+                checkpoint_step = int(checkpoint_search.group(1))
+                if highest_step <= checkpoint_step:
+                    highest_step = checkpoint_step
+                    highest_step_folder = item_path
+    return highest_step_folder
 
 def transformers_init(request_headers):
     if "cuda-visible-devices" in request_headers:
@@ -1441,8 +1455,9 @@ def run_function_multi_process(request, func):
         queue = ctx.Queue()
         process = ctx.Process(target=multi_process_wrapper_function, args=(queue, func, dict(request.headers.items(lower=True)),))
         process.start()
+        my_result = queue.get()
         process.join()
-        return queue.get()
+        return my_result
 
 
 def inner_transformers_prediction(request_headers):
@@ -1467,11 +1482,11 @@ def inner_transformers_prediction(request_headers):
 
         with tempfile.TemporaryDirectory(dir=tmp_dir) as tmpdirname:
             initial_arguments = {
-                'report_to': 'none'
+                'report_to': 'none',
+                #'disable_tqdm' : True,
             }
             fixed_arguments = {
-                'output_dir': os.path.join(tmpdirname, "trainer_output_dir"),
-                'disable_tqdm': True,
+                'output_dir': os.path.join(tmpdirname, "trainer_output_dir")
             }
             training_args = transformers_get_training_arguments(using_tensorflow, initial_arguments, training_arguments, fixed_arguments)
 
@@ -1495,6 +1510,7 @@ def inner_transformers_prediction(request_headers):
 
             app.logger.info("Run prediction")
             pred_out = trainer.predict(predict_dataset)
+            app.logger.info(pred_out.metrics)
         class_index = 0 if change_class else 1
         # sigmoid: scores = 1 / (1 + np.exp(-pred_out.predictions, axis=1[:, class_index]))
         # compute softmax to get class probabilities (scores between 0 and 1)
@@ -1581,6 +1597,9 @@ def inner_transformers_finetuning(request_headers):
         training_file = request_headers["training-file"]
         using_tensorflow = request_headers["using-tf"].lower() == "true"
         training_arguments = json.loads(request_headers["training-arguments"])
+        
+        save_at_end = training_arguments.get('save_at_end', True)
+        training_arguments.pop('save_at_end', None) # delete if existent
 
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(initial_model_name)
@@ -1593,19 +1612,21 @@ def inner_transformers_finetuning(request_headers):
 
         with tempfile.TemporaryDirectory(dir=tmp_dir) as tmpdirname:
             initial_arguments = {
-                'report_to': 'none'
+                'report_to': 'none',
+                # 'disable_tqdm' : True,
             }
 
             fixed_arguments = {
                 'output_dir': os.path.join(tmpdirname, "trainer_output_dir"),
-                'save_strategy': 'no',
-                'disable_tqdm': True,
+                'save_strategy' : 'no',
             }
         
             training_args = transformers_get_training_arguments(using_tensorflow, initial_arguments, training_arguments, fixed_arguments)
 
             app.logger.info("Loading transformers model")
             if using_tensorflow:
+                import tensorflow as tf
+                app.logger.info("Num gpu avail: " + str(len(tf.config.list_physical_devices('GPU'))))
                 from transformers import TFTrainer, TFAutoModelForSequenceClassification
 
                 with training_args.strategy.scope():
@@ -1614,6 +1635,8 @@ def inner_transformers_finetuning(request_headers):
                 trainer = TFTrainer(model=model, tokenizer=tokenizer, train_dataset=training_dataset,
                                     args=training_args)
             else:
+                import torch
+                app.logger.info("Is gpu used: " + str(torch.cuda.is_available()))
                 from transformers import Trainer, AutoModelForSequenceClassification
                 model = AutoModelForSequenceClassification.from_pretrained(initial_model_name, num_labels=2)
 
@@ -1623,8 +1646,9 @@ def inner_transformers_finetuning(request_headers):
             app.logger.info("Run training")
             trainer.train()
 
-            app.logger.info("Save model")
-            trainer.save_model(resulting_model_location)
+            if save_at_end:
+                app.logger.info("Save model")
+                trainer.save_model(resulting_model_location)
         return "True"
     except Exception as e:
         import traceback
@@ -1644,7 +1668,8 @@ def transformers_finetuning():
 def transformers_finetuning_hp_search():
     try:
         transformers_init(request.headers)
-        
+        os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
         initial_model_name = request.headers["model-name"]
         resulting_model_location = request.headers["resulting-model-location"]
         tmp_dir = request.headers["tmp-dir"]
@@ -1658,8 +1683,8 @@ def transformers_finetuning_hp_search():
         hp_space = json.loads(request.headers["hp-space"])
         hp_mutations = json.loads(request.headers["hp-mutations"])
 
-        if optimizing_metric not in set(['loss', 'accuracy', 'f1', 'precision', 'recall', 'auc']):
-            raise ValueError("optimize_metric is not one of loss, accuracy, f1, precision, recall, auc.")
+        if optimizing_metric not in set(['loss', 'accuracy', 'f1', 'precision', 'recall', 'auc', 'aucf1']):
+            raise ValueError("optimize_metric is not one of loss, accuracy, f1, precision, recall, auc, aucf1.")
 
         optimize_direction = 'minimize' if optimizing_metric == 'loss' else 'maximize'
 
@@ -1684,17 +1709,16 @@ def transformers_finetuning_hp_search():
 
         with tempfile.TemporaryDirectory(dir=tmp_dir) as tmpdirname:
             initial_arguments = {
-                'report_to': 'none'
+                'report_to': 'none',
+                'disable_tqdm' : True,
             }
 
             fixed_arguments = {
                 'output_dir': os.path.join(tmpdirname, "trainer_output_dir"),
-                'disable_tqdm': True,
-                'skip_memory_metrics': True,  # see https://github.com/huggingface/transformers/issues/11249
-                'save_strategy': 'epoch',
-                'do_eval': True,
+                'skip_memory_metrics' : True, # see https://github.com/huggingface/transformers/issues/11249
+                'save_strategy' : 'epoch',
+                'do_eval' : True,
                 'evaluation_strategy': 'epoch',
-                'report_to': 'none',
             }
 
             training_args = transformers_get_training_arguments(using_tensorflow, initial_arguments, training_arguments, fixed_arguments)
@@ -1713,11 +1737,14 @@ def transformers_finetuning_hp_search():
                     'f1': f1,
                     'precision': precision,
                     'recall': recall,
-                    'auc': auc
+                    'auc': auc,
+                    'aucf1': auc + f1
                 }
 
             app.logger.info("Loading transformers model")
             if using_tensorflow:
+                import tensorflow as tf
+                app.logger.info("Num gpu avail: " + str(len(tf.config.list_physical_devices('GPU'))))
                 from transformers import TFTrainer, TFAutoModelForSequenceClassification
 
                 def model_init():
@@ -1733,6 +1760,8 @@ def transformers_finetuning_hp_search():
                     args=training_args
                 )
             else:
+                import torch
+                app.logger.info("Is gpu used: " + str(torch.cuda.is_available()))
                 from transformers import Trainer, AutoModelForSequenceClassification
                 def model_init():
                     return AutoModelForSequenceClassification.from_pretrained(initial_model_name, num_labels=2)
@@ -1768,9 +1797,35 @@ def transformers_finetuning_hp_search():
 
             process_search_space(hp_space)
             process_search_space(hp_mutations)
+            
+            shorter_names = {
+                "weight_decay": "w_decay",
+                "learning_rate": "lr",
+                "per_device_train_batch_size": "batch",
+                "num_train_epochs": "epochs"
+            }
+            param_dict_shorter_names = {hp_key: shorter_names[hp_key] if hp_key in shorter_names else hp_key 
+                for hp_key in set(hp_space.keys()).union(hp_mutations.keys()) }
 
             app.logger.info("hp_space: " + str(hp_space))
             app.logger.info("hp_mutations: " + str(hp_mutations))
+            
+            from ray.tune import CLIReporter
+            class FlushingReporter(CLIReporter):
+                def report(self, trials, done, *sys_info):
+                    print(self._progress_str(trials, done, *sys_info), flush=True)
+            
+            reporter = FlushingReporter(parameter_columns=param_dict_shorter_names,
+                metric_columns={
+                    'objective': 'objective',
+                    'eval_auc': 'auc',
+                    'eval_f1': 'f1',
+                    'eval_precision': 'prec',
+                    'eval_recall': 'rec',
+                    'eval_accuracy': 'acc',
+                    'time_total_s':'time(s)',
+                }
+            )
 
             best_run = trainer.hyperparameter_search(
                 hp_space=lambda _: hp_space,
@@ -1791,23 +1846,31 @@ def transformers_finetuning_hp_search():
                 resources_per_trial={"cpu": 1, "gpu": 1},
                 local_dir=ray_local_dir,
                 name=run_name,
+                progress_reporter=reporter,
+                trial_name_creator=lambda trial: trial.trial_id,
+                trial_dirname_creator=lambda trial: trial.trial_id,
             )
 
             ray.shutdown()
+            
+            trial_root_folder = os.path.join(ray_local_dir, run_name, best_run.run_id)
+            highest_outer_step_folder = transformers_search_folder_with_highest_count(trial_root_folder, 'checkpoint_([0-9]+)')
 
-            matching_folders = glob.glob(
-                os.path.join(ray_local_dir, run_name, "_objective_" + best_run.run_id + "*", "checkpoint_*",
-                             "checkpoint-*"))
-            if not matching_folders:
-                app.logger.warning(
-                    "Could not find a checkpoint directory to load to best model from. Return without saving any model.")
+            if not highest_outer_step_folder:
+                app.logger.warning("Could not find a checkpoint directory to load to best model from. Return without saving any model.")
                 return "ERROR Could not find a checkpoint directory to load to best model from"
-            app.logger.info("Found best model in checkpoint folder: " + str(matching_folders[0]))
+            
+            highest_step_folder = transformers_search_folder_with_highest_count(highest_outer_step_folder, 'checkpoint-([0-9]+)')
+            if not highest_step_folder:
+                app.logger.warning("Could not find a checkpoint within the checkpoint directory but lets try the outer checkpoint directory.")
+                highest_step_folder = highest_outer_step_folder
+            
+            app.logger.info("Found best model in checkpoint folder: " + str(highest_step_folder))
 
             if using_tensorflow:
                 with training_args.strategy.scope():
-                    model = TFAutoModelForSequenceClassification.from_pretrained(matching_folders[0], num_labels=2)
-                tokenizer = AutoTokenizer.from_pretrained(matching_folders[0])
+                    model = TFAutoModelForSequenceClassification.from_pretrained(highest_step_folder, num_labels=2)
+                tokenizer = AutoTokenizer.from_pretrained(highest_step_folder)
                 trainer = TFTrainer(
                     model=model,
                     tokenizer=tokenizer,
@@ -1816,8 +1879,8 @@ def transformers_finetuning_hp_search():
                     args=training_args
                 )
             else:
-                model = AutoModelForSequenceClassification.from_pretrained(matching_folders[0], num_labels=2)
-                tokenizer = AutoTokenizer.from_pretrained(matching_folders[0])
+                model = AutoModelForSequenceClassification.from_pretrained(highest_step_folder, num_labels=2)
+                tokenizer = AutoTokenizer.from_pretrained(highest_step_folder)
                 trainer = Trainer(
                     model=model,
                     tokenizer=tokenizer,
@@ -1831,6 +1894,7 @@ def transformers_finetuning_hp_search():
 
             app.logger.info("Save model")
             trainer.save_model(resulting_model_location)
+        del os.environ["TOKENIZERS_PARALLELISM"]
         return "True"
     except Exception as e:
         import traceback

@@ -4,6 +4,7 @@ import de.uni_mannheim.informatik.dws.melt.matching_base.FileUtil;
 import de.uni_mannheim.informatik.dws.melt.matching_base.Filter;
 import de.uni_mannheim.informatik.dws.melt.matching_jena.TextExtractor;
 import de.uni_mannheim.informatik.dws.melt.matching_ml.python.PythonServer;
+import de.uni_mannheim.informatik.dws.melt.matching_ml.python.PythonServerException;
 import de.uni_mannheim.informatik.dws.melt.yet_another_alignment_api.Alignment;
 import de.uni_mannheim.informatik.dws.melt.yet_another_alignment_api.Correspondence;
 import de.uni_mannheim.informatik.dws.melt.yet_another_alignment_api.CorrespondenceRelation;
@@ -13,6 +14,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
+import java.nio.charset.StandardCharsets;
 import java.util.Properties;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.text.StringEscapeUtils;
@@ -22,17 +24,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * This class is used to finetune a transformer model based on a generated dataset.
- * It comes in two fashions. First, it can be used to generate a fine-tuned model with every call of the match method.
- * The input alignment of the match method is used to generate a training dataset.
- * Thus, the input alignment should contain positive correspondences (with an equivalence relation) and negative
- * correspondences (with another relation than equivalence).
- * 
- * As a second fashion, this matcher can be used to only generate the training file (by possibly multiple calls to the match method).
- * Thus, within the match method only the training file is written. After all calls to the match method, one can call
- * the {@link #finetuneModel() } function to train the model on the whole dataset.
- * 
- * In both cases, the fine-tuned model as well as the tokenizer is written to the specified directory.
+ * This class is used to fine-tune a transformer model based on a generated dataset.
+ * In every call to the match method, the training data will be generated and appended to a temporary file.
+ * When you call the {@link TransformersFineTuner#finetuneModel() } method, then a model is fine-tuned and the
+ * training file is deleted.
  */
 public class TransformersFineTuner extends TransformersBase implements Filter {
 
@@ -46,6 +41,23 @@ public class TransformersFineTuner extends TransformersBase implements Filter {
     //memory issue with transformers library
     //https://github.com/huggingface/transformers/issues/6753
     //https://github.com/huggingface/transformers/issues/1742
+
+    /**
+     * Run the training of a NLP transformer.
+     * @param extractor used to extract text from a given resource. This is the text which represents a resource.
+     * @param initialModelName the initial model name for fine tuning which can be downloaded or a path to a directory containing model weights
+     *   (<a href="https://huggingface.co/transformers/main_classes/model.html#transformers.PreTrainedModel.from_pretrained">
+     *   see first parameter pretrained_model_name_or_path of the from_pretrained
+     *   function in huggingface library</a>). This value can be also changed by {@link #setModelName(java.lang.String) }.
+     * @param resultingModelLocation the final location where the fine-tuned model should be stored.
+     * @param tmpDir Sets the tmp directory used by the matcher. In this folder the file with all texts from the knowledge graph are stored.
+     */
+    public TransformersFineTuner(TextExtractor extractor, String initialModelName, File resultingModelLocation, File tmpDir) {
+        super(extractor, initialModelName);
+        this.tmpDir = tmpDir;
+        this.resultingModelLocation = resultingModelLocation;
+        this.trainingFile = FileUtil.createFileWithRandomNumber(this.tmpDir, "alignment_transformers_train", ".txt");
+    }
     
     /**
      * Run the training of a NLP transformer.
@@ -57,29 +69,13 @@ public class TransformersFineTuner extends TransformersBase implements Filter {
      * @param resultingModelLocation the final location where the finetuned model should be stored.
      */
     public TransformersFineTuner(TextExtractor extractor, String initialModelName, File resultingModelLocation) {
-        super(extractor, initialModelName);
-        
-        this.resultingModelLocation = resultingModelLocation;
-        this.trainingFile = null;
+        this(extractor, initialModelName, resultingModelLocation, FileUtil.SYSTEM_TMP_FOLDER);
     }
     
     @Override
     public Alignment match(OntModel source, OntModel target, Alignment inputAlignment, Properties properties) throws Exception {
-        LOGGER.info("Write text to training file");
-        if(this.trainingFile != null){
-            //append to this training file:
-            writeTrainingFile(source, target, inputAlignment, this.trainingFile, true);
-        }else{
-            //write to new file and directly train a model
-            File trainFile = createTrainingFile(source, target, inputAlignment);
-            if(trainFile == null)
-                return inputAlignment;
-            try{
-                finetuneModel(trainFile);
-            } finally{
-                trainFile.delete();
-            }
-        }
+        LOGGER.info("Append text to training file: {}", this.trainingFile);
+        writeTrainingFile(source, target, inputAlignment, this.trainingFile, true);
         return inputAlignment;
     }
     
@@ -117,26 +113,52 @@ public class TransformersFineTuner extends TransformersBase implements Filter {
         int notUsed = 0;
         int positive = 0;
         int negative = 0;
-        try (Writer writer = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(trainFile, append), "UTF-8"))){
-            for(Correspondence c : trainingAlignment){
-                String left = getTextFromResource(source.getResource(c.getEntityOne()));
-                String right = getTextFromResource(target.getResource(c.getEntityTwo()));
-                if(StringUtils.isBlank(left) || StringUtils.isBlank(right)){
-                    notUsed++;
-                    continue; // do not use examples where one or the other text is zero
+        try (Writer writer = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(trainFile, append), StandardCharsets.UTF_8))){
+            if(this.multipleTextsToMultipleExamples){
+                for(Correspondence c : trainingAlignment){
+                    for(String textLeft : this.extractor.extract(source.getResource(c.getEntityOne()))){
+                        if(StringUtils.isBlank(textLeft)){
+                            continue;
+                        }
+                        for(String textRight : this.extractor.extract(target.getResource(c.getEntityTwo()))){
+                            if(StringUtils.isBlank(textRight)){
+                                continue;
+                            }
+                            String clazz;
+                            if(c.getRelation() == CorrespondenceRelation.EQUIVALENCE){
+                                clazz = "1";
+                                positive++;
+                            }else{
+                                clazz = "0";
+                                negative++;
+                            }
+                            writer.write(StringEscapeUtils.escapeCsv(textLeft) + "," + StringEscapeUtils.escapeCsv(textRight) +  "," + clazz + NEWLINE);
+                        }
+                    }
                 }
-                String clazz;
-                if(c.getRelation() == CorrespondenceRelation.EQUIVALENCE){
-                    clazz = "1";
-                    positive++;
-                }else{
-                    clazz = "0";
-                    negative++;
+                LOGGER.info("Wrote {} training examples. {} positive, {} negative (number of unused is to determined).", positive+negative, positive, negative);
+            }else{
+                for(Correspondence c : trainingAlignment){
+                    String left = getTextFromResource(source.getResource(c.getEntityOne()));
+                    String right = getTextFromResource(target.getResource(c.getEntityTwo()));
+                    if(StringUtils.isBlank(left) || StringUtils.isBlank(right)){
+                        notUsed++;
+                        continue; // do not use examples where one or the other text is zero
+                    }
+                    String clazz;
+                    if(c.getRelation() == CorrespondenceRelation.EQUIVALENCE){
+                        clazz = "1";
+                        positive++;
+                    }else{
+                        clazz = "0";
+                        negative++;
+                    }
+                    writer.write(StringEscapeUtils.escapeCsv(left) + "," + StringEscapeUtils.escapeCsv(right)+  "," + clazz + NEWLINE);
                 }
-                writer.write(StringEscapeUtils.escapeCsv(left) + "," + StringEscapeUtils.escapeCsv(right)+  "," + clazz + NEWLINE);
+                LOGGER.info("Wrote {} training examples. {} positive, {} negative, {} not used due to insufficient textual data.", positive+negative, positive, negative, notUsed);
             }
         }
-        LOGGER.info("Wrote {} training examples. {} positive, {} negative, {} not used due to insufficient textual data.", positive+negative, positive, negative, notUsed);
+        
         return positive+negative;
     }
     
@@ -162,14 +184,33 @@ public class TransformersFineTuner extends TransformersBase implements Filter {
     /**
      * This method should only be used when appendOnlyToFile is set to true.
      * This will train a transformers model on the file generated by the match method during possibley multiple calls.
-     * @return the final location (directory) of the finetuned model (which is also given in the constructor)
+     * @return the final location (directory) of the fine-tuned model (which is also given in the constructor)
      * @throws Exception in case of any error
      */
     public File finetuneModel() throws Exception{
-        if(this.trainingFile == null){
-            throw new IllegalArgumentException("Cannot finetune a model if appendOnlyToFile is set to false.");
+        if(this.trainingFile == null || !this.trainingFile.exists() || this.trainingFile.length() == 0){
+            throw new IllegalArgumentException("Cannot finetune a model if because no training file is generated. Did you call the match method before (e.g. in a pipeline)?");
         }
-        return finetuneModel(this.trainingFile);
+        File toReturn = finetuneModel(this.trainingFile);
+        this.trainingFile.delete();
+        return toReturn;
+    }
+    
+    /**
+     * This will add (potencially multiple) training parameters to the current {@link TransformersBase#trainingArguments trainingArguments}
+     * to make the training faster. Thus do not change the trainingArguments object afterwards 
+     * (with {@link TransformersBase#setTrainingArguments(de.uni_mannheim.informatik.dws.melt.matching_ml.python.nlptransformers.TransformersTrainerArguments) setTrainingArguments} ).
+     * What you can do is to add more training arguments via getTrainingArguments.addParameter (as long as you do not modify any parameters added by this method).
+     * The following parameters are set:
+     * <ul>
+     *  <li>fp16</li>   
+     * </ul>
+     * @see <a href="https://huggingface.co/transformers/performance.html">Transformers performance page on huggingface</a>
+     */
+    public void addTrainingParameterToMakeTrainingFaster(){
+        //https://huggingface.co/transformers/performance.html
+        //https://huggingface.co/transformers/performance.html
+        this.trainingArguments.addParameter("fp16", true);
     }
     
        /*
@@ -195,31 +236,4 @@ public class TransformersFineTuner extends TransformersBase implements Filter {
     public void setResultingModelLocation(File resultingModelLocation) {
         this.resultingModelLocation = resultingModelLocation;
     }
-    
-    /**
-     * Returns true, if this matcher only appends the training data to a file and do not train any transformer model.
-     * This is useful if the training data should be generated by multiple runs of the match method.
-     * In the match method, only the training data is generated.
-     * After all calls of the match method, call the {@link #finetuneModel() } method to finally train the model.
-     * @return true if during matching only the training data is generated and no model is trained.
-     */
-    public boolean isAppendOnlyToFile(){
-        return this.trainingFile != null;
-    }
-    
-    /**
-     * Sets the value if this matcher should only append the training data to a file and do not train any transformer model.
-     * This is useful if the training data should be generated by multiple runs of the match method.
-     * In the match method, only the training data is generated.
-     * After all calls of the match method, call the {@link #finetuneModel() } method to finally train the model.
-     * @param appendOnlyToFile true if during matching only the training data is generated and no model is trained.
-     *       If a model should be trained with every call to the match method set it to false (which is the default).
-     */
-    public void setAppendOnlyToFile(boolean appendOnlyToFile){
-        if(appendOnlyToFile == true && this.trainingFile == null){
-            this.trainingFile = FileUtil.createFileWithRandomNumber(tmpDir, "alignment_transformers_train", ".txt");
-        }else if(appendOnlyToFile == false && this.trainingFile != null){
-            this.trainingFile = null;
-        }
-    } 
 }

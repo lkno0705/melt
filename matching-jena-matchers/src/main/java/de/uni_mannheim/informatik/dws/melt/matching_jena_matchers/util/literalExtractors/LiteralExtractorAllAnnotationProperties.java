@@ -1,6 +1,7 @@
 package de.uni_mannheim.informatik.dws.melt.matching_jena_matchers.util.literalExtractors;
 
 import de.uni_mannheim.informatik.dws.melt.matching_jena.LiteralExtractor;
+import de.uni_mannheim.informatik.dws.melt.matching_jena_matchers.util.URIUtil;
 import org.apache.jena.ontology.AnnotationProperty;
 import org.apache.jena.ontology.OntResource;
 import org.apache.jena.rdf.model.Literal;
@@ -14,6 +15,10 @@ import org.slf4j.LoggerFactory;
 
 import java.util.HashSet;
 import java.util.Set;
+import org.apache.jena.ontology.OntModel;
+import org.apache.jena.rdf.model.Model;
+import org.apache.jena.rdf.model.StmtIterator;
+import org.apache.jena.vocabulary.RDFS;
 
 /**
  * All annotation properties are followed (recursively).
@@ -54,21 +59,22 @@ public class LiteralExtractorAllAnnotationProperties implements LiteralExtractor
             return result;
         }
         recursionDepth++;
-
-        if (resource instanceof OntResource) {
-            ExtendedIterator<AnnotationProperty> propertyIterator = ((OntResource) resource).getOntModel().listAnnotationProperties();
+        Model model = resource.getModel();
+        if (model instanceof OntModel) {
+            ExtendedIterator<AnnotationProperty> propertyIterator = ((OntModel) model).listAnnotationProperties();
             while (propertyIterator.hasNext()) {
                 AnnotationProperty property = propertyIterator.next();
-                RDFNode n = ((OntResource) resource).getPropertyValue(property);
-                if (n != null) {
-                    if (n.isURIResource()) {
+                StmtIterator stmts = resource.listProperties(property);
+                while(stmts.hasNext()){
+                    RDFNode n = stmts.next().getObject();
+                    if (n.isResource()) {
                         if (recursionDepth < 10) {
                             result.addAll(getAnnotationPropertiesRecursionDeadLockSafe(n.asResource(), recursionDepth));
                         } else {
                             LOGGER.warn("Potential Infinity Loop Detected - aborting annotation property retrieval.");
                             return result;
                         }
-                    } else {
+                    } else if(n.isLiteral()) {
                         result.add(n.asLiteral());
                     }
                 }
@@ -88,19 +94,32 @@ public class LiteralExtractorAllAnnotationProperties implements LiteralExtractor
      * @return Label or local name. Null if resource is anonymous.
      */
     private static Literal getLabelOrFragmentWithoutLanguageAnnotation(Resource resource) {
-        if (resource.isAnon()) {
-            return null;
-        }
-
-        if (resource instanceof OntResource) {
-            ExtendedIterator<RDFNode> iterator = ((OntResource) resource).listLabels(null);
-            while (iterator.hasNext()) {
-                RDFNode node = iterator.next();
+        ExtendedIterator<RDFNode> iterator = resource.listProperties(RDFS.label).mapWith(s->s.getObject());
+        while (iterator.hasNext()) {
+            RDFNode node = iterator.next();
+            if(node.isLiteral())
                 return node.asLiteral();
-            }
         }
+        String uri = resource.getURI();
+        if(uri == null)
+            return null;
+        return ResourceFactory.createStringLiteral(URIUtil.getUriFragment(uri));
+    }
+    
+    
+    @Override
+    public int hashCode() {
+        return 54574258;
+    }
 
-        // no label found: return local name
-        return ResourceFactory.createStringLiteral(resource.getLocalName());
+    @Override
+    public boolean equals(Object obj) {
+        if (this == obj) {
+            return true;
+        }
+        if (obj == null) {
+            return false;
+        }
+        return getClass() == obj.getClass();
     }
 }

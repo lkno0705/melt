@@ -153,6 +153,7 @@ public abstract class Track {
         if(testCases == null){
             testCases = readFromCache();
             if (testCases.size() > 0) {
+                testCases.sort((TestCase o1, TestCase o2) -> o1.getName().compareTo(o2.getName()));
                 return testCases;
             }
             try {
@@ -161,8 +162,8 @@ public abstract class Track {
                 LOGGER.error("Couldn't download test cases and store them in cache folder", ex);
             }
             testCases = readFromCache();
+            testCases.sort((TestCase o1, TestCase o2) -> o1.getName().compareTo(o2.getName()));
         }
-        testCases.sort((TestCase o1, TestCase o2) -> o1.getName().compareTo(o2.getName()));
         return testCases;
     }
     
@@ -280,6 +281,33 @@ public abstract class Track {
                 if(alreadySeen.contains(sourceTargetNames[1]) == false){
                     distinctOntologies.add(testCase.getTarget().toURL());
                     alreadySeen.add(sourceTargetNames[1]);
+                }
+            } catch (MalformedURLException ex) {
+                LOGGER.warn("Cannot convert URI to URL at test case {}. Just skipping.", testCase.getName());
+            }
+        }
+        return distinctOntologies;
+    }
+    
+    public Map<String, URL> getDistinctOntologiesMap(){
+        return getDistinctOntologiesMap(getTestCases());
+    }
+    
+    public static Map<String, URL> getDistinctOntologiesMap(List<TestCase> testCases){
+        Map<String, URL> distinctOntologies = new HashMap<>();
+        for(TestCase testCase : testCases){
+            String[] sourceTargetNames = testCase.getName().split("-");
+            if(sourceTargetNames.length != 2){
+                LOGGER.warn("Test case name contains none or more than one '-' character which is not possible when requesting distinct ontologies."
+                        + " We just skip this test case. Name of the test case: {} Name of the track: {}", testCase.getName(), testCase.getTrack().getName());
+                continue;
+            }
+            try {
+                if(distinctOntologies.containsKey(sourceTargetNames[0])== false){
+                    distinctOntologies.put(sourceTargetNames[0], testCase.getSource().toURL());
+                }
+                if(distinctOntologies.containsKey(sourceTargetNames[1])== false){
+                    distinctOntologies.put(sourceTargetNames[1], testCase.getTarget().toURL());
                 }
             } catch (MalformedURLException ex) {
                 LOGGER.warn("Cannot convert URI to URL at test case {}. Just skipping.", testCase.getName());

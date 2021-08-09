@@ -27,6 +27,10 @@ public class TransformersTrainerArguments {
         this.config = new HashMap<>();
     }
     
+    public TransformersTrainerArguments(TransformersTrainerArguments copyArguments){
+        this.config = new HashMap<>(copyArguments.config);
+    }
+    
     public TransformersTrainerArguments(Map<String, Object> config){
         this.config = config;
     }
@@ -39,7 +43,8 @@ public class TransformersTrainerArguments {
         Map<String, Object> map = new HashMap<>();
         for (int i = 0; i < arr.length; i+=2) {
             if(i+1 >= arr.length){
-                LOGGER.error("Uneven number of configuration arguments. Exepect are Key1, Value1, Key2, Value2, ....->Discard last extension");
+                LOGGER.error("Uneven number of configuration arguments. Expected are Key1, Value1, Key2, Value2, ..." +
+                        ".->Discard last extension");
                 break;
             }
             map.put(arr[i].toString(), arr[i + 1]);
@@ -50,6 +55,14 @@ public class TransformersTrainerArguments {
     public TransformersTrainerArguments addParameter(String key, Object value){
         this.config.put(key, value);
         return this;
+    }
+    
+    public Object getParameter(String key){
+        return this.config.get(key);
+    }
+    
+    public Object getParameterOrDefault(String key, Object defaultValue){
+        return this.config.getOrDefault(key, defaultValue);
     }
     
     public String toJsonString(){
