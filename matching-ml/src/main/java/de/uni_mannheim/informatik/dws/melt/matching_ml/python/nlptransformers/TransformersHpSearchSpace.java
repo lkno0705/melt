@@ -11,7 +11,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * This class represents the search space for hyperparameters.
+ * This class represents the search space for hyper parameters.
  * Each method represents the type of sampling and it need a parameter which appears as a <a href="https://huggingface.co/transformers/main_classes/trainer.html#transformers.TrainingArguments">training argument</a>.
  * <pre>
  * {@code
@@ -22,7 +22,8 @@ import org.slf4j.LoggerFactory;
  * </pre>
  */
 public class TransformersHpSearchSpace {
-    
+
+
     private static final Logger LOGGER = LoggerFactory.getLogger(TransformersHpSearchSpace.class);
     private static final ObjectMapper JSON_MAPPER = new ObjectMapper();
     static{
@@ -366,6 +367,7 @@ public class TransformersHpSearchSpace {
         //https://medium.com/distributed-computing-with-ray/hyperparameter-optimization-for-transformers-a-guide-c4e32c6c989b --> 
         //                https://colab.research.google.com/drive/1tQgAKgcKQzheoh503OzhS4N9NtfFgmjF?usp=sharing
         //https://docs.ray.io/en/master/tune/examples/pbt_transformers.html
+        //https://github.com/huggingface/transformers/blob/9160d81c98854df44b1d543ce5d65a6aa28444a2/src/transformers/trainer_utils.py#L186
         
         //"learning_rate", "num_train_epochs","per_device_train_batch_size","weight_decay","warmup_steps"
         //
@@ -375,12 +377,14 @@ public class TransformersHpSearchSpace {
                 .choice("num_train_epochs", Arrays.asList(1,2,3,4,5))
                 .uniform("seed", 1, 40) //TODO: maybe use randint because seed is int and not float
                 .choice("per_device_train_batch_size", Arrays.asList(4, 8, 16, 32, 64));
-        //TODO: define search space...
     }
     
     public static TransformersHpSearchSpace getDefaultHpSpaceMutations(){
-        return new TransformersHpSearchSpace();
-        //TODO: define search space...
+        ////https://docs.ray.io/en/master/tune/examples/pbt_transformers.html
+        return new TransformersHpSearchSpace()
+                .uniform("weight_decay", 0.0f, 0.3f)
+                .uniform("learning_rate", 1e-5f, 5e-5f)
+                .choice("per_device_train_batch_size", Arrays.asList(4, 8, 16, 32, 64));
     }
 }
 

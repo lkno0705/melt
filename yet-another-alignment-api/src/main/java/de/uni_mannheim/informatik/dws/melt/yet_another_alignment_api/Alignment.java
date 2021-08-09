@@ -345,8 +345,7 @@ public class Alignment extends ConcurrentIndexedCollection<Correspondence> {
     public Correspondence addOrUseHighestConfidence(String entityOne, String entityTwo, double confidence) {
         return addOrUseHighestConfidence(new Correspondence(entityOne, entityTwo, confidence));
     }
-    
-    
+
     /**
      * Returns the specified correspondence (source, target, relation). If not available it returns null.
      * @param source Source URI.
@@ -367,7 +366,8 @@ public class Alignment extends ConcurrentIndexedCollection<Correspondence> {
         }
         Correspondence result = iterator.next();
         if (iterator.hasNext()) {
-            LOGGER.error("Alignment contains more than one correspondence with source, target, relation. Maybe equals and/or hashcode of Correspondence are overridden. " +
+            LOGGER.error("Alignment contains more than one correspondence with source, target, relation. Maybe equals " +
+                    "and/or hashcode of Correspondence are overridden. " +
                     "A mapping correspondence is equal when source, target and relation are equal.");
         }
         return result;
@@ -533,12 +533,6 @@ public class Alignment extends ConcurrentIndexedCollection<Correspondence> {
         assertIndexOnConfidence();
         Alignment m = new Alignment(this, false);
         ResultSet<Correspondence> result = this.retrieve(QueryFactory.greaterThanOrEqualTo(Correspondence.CONFIDENCE, threshold));
-        //m.addAll(result.stream().collect(Collectors.toList()));  //makes an arraylist 
-        //List<Correspondence> list = new ArrayList<>(result.size());
-        //for(Correspondence c : result){
-        //    list.add(c);
-        //}
-        //m.addAll(list);        
         for(Correspondence c : result){
             m.add(c);
         }
@@ -681,9 +675,9 @@ public class Alignment extends ConcurrentIndexedCollection<Correspondence> {
         return result;
     }
 
-
     /**
-     * Create the subtraction between the two given alignments. Only copies the alignment and not further infos like onto or extensions.
+     * Create the subtraction between the two given alignments. Only copies the alignment and not further infos like
+     * onto or extensions.
      * @param alignment_1 Set 1.
      * @param alignment_2 Set 2.
      * @return Subtraction alignment.
@@ -694,10 +688,10 @@ public class Alignment extends ConcurrentIndexedCollection<Correspondence> {
         result.removeAll(alignment_2);
         return result;
     }
-
     
     /**
-     * Create the intersection between the two given alignments. Only copies the alignment and not further infos like onto or extensions.
+     * Create the intersection between the two given alignments. Only copies the alignment and not further infos like
+     * onto or extensions.
      * @param alignment_1 Set 1.
      * @param alignment_2 Set 2.
      * @return Intersection alignment.
@@ -712,7 +706,8 @@ public class Alignment extends ConcurrentIndexedCollection<Correspondence> {
     }
 
     /**
-     * Create the union between the two given alignments. Only copies the alignment and not further infos like onto or extensions.
+     * Create the union between the two given alignments. Only copies the alignment and not further infos like onto or
+     * extensions.
      * @param alignment_1 Set 1.
      * @param alignment_2 Set 2.
      * @return Union alignment.
@@ -723,8 +718,7 @@ public class Alignment extends ConcurrentIndexedCollection<Correspondence> {
         result.addAll(alignment_2);
         return result;
     }
-    
-    
+
     /**
      * Switches sources with targets. Does not change the relation.
      * This method is only for erroneous alignments where a matcher switched the source with the target ontology.
@@ -813,6 +807,24 @@ public class Alignment extends ConcurrentIndexedCollection<Correspondence> {
         ArrayList<Correspondence> list = new ArrayList<>(this);
         list.sort(new CorrespondenceConfidenceComparator());
         return list;
+    }
+
+    public double getMinimalConfidence(){
+        List<Correspondence> list = getConfidenceOrderedMapping();
+        if(list == null || list.isEmpty()){
+            LOGGER.error("There are no confidences. Returning 0.0 as minimum confidence.");
+            return 0.0;
+        }
+        return list.get(0).getConfidence();
+    }
+
+    public double getMaximalConfidence() {
+        List<Correspondence> list = getConfidenceOrderedMapping();
+        if(list == null || list.isEmpty()){
+            LOGGER.error("There are no confidences. Returning 1.0 as maximum confidence.");
+            return 1.0;
+        }
+        return list.get(list.size() - 1).getConfidence();
     }
     
     public void assertIndexOnSource(){
@@ -918,6 +930,29 @@ public class Alignment extends ConcurrentIndexedCollection<Correspondence> {
             list.add(element);
         }
         return list;
+    }
+    
+    /**
+     * Returns the size of the iterator.
+     * @param i the iterator to use
+     * @return the size of the iterator.
+     */
+    public static long iteratorSize(Iterator<?> i) {
+        long count = 0;
+        while(i.hasNext()){
+            i.next();
+            count++;
+        }
+        return count;
+    }
+    
+    /**
+     * Returns the size of the iterable.
+     * @param i the iterable to use
+     * @return the size of the iterable.
+     */
+    public static long iterableSize(Iterable<?> i) {
+        return iteratorSize(i.iterator());
     }
 
     /**
